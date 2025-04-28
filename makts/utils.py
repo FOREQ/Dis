@@ -17,6 +17,7 @@ def create_metrics_chart(scores):
     """
     Создает радарную диаграмму для визуализации метрик.
     Ограничивает значения диапазоном [0, 1] для корректного отображения.
+    TER больше не обрабатывается отдельно, т.к. метрика удалена.
     """
     metrics_for_chart = []
     values_for_chart = []
@@ -26,22 +27,14 @@ def create_metrics_chart(scores):
         if value is None or not isinstance(value, (int, float)) or not np.isfinite(value):
             continue
 
-        # Обработка TER: инвертируем (1 - score) и обрезаем до [0, 1]
-        # if metric == 'TER':
-            # Инвертированный TER: чем ближе к 1, тем лучше (меньше ошибок)
-            # chart_value = max(0.0, min(1.0, 1.0 - value))
-            # Добавляем (Inv) к названию для ясности на диаграмме
-            # metrics_for_chart.append(f"{metric} (Inv)")
-            # values_for_chart.append(chart_value)
-        # Обработка других метрик: просто обрезаем до [0, 1]
-        elif metric != 'TER': # Все остальные метрики, где выше = лучше
-             chart_value = max(0.0, min(1.0, value))
-             metrics_for_chart.append(metric)
-             values_for_chart.append(chart_value)
+        # Обрезаем все значения до диапазона [0, 1]
+        # Так как TER удален, специальная обработка для него не нужна
+        chart_value = max(0.0, min(1.0, value))
+        metrics_for_chart.append(metric)
+        values_for_chart.append(chart_value)
 
     # Если нет данных для построения графика
     if not metrics_for_chart:
-        # Возвращаем пустой объект фигуры или можно вернуть None/сообщение
         return go.Figure().update_layout(title_text="Нет данных для отображения диаграммы")
 
     # Добавляем первую метрику в конец, чтобы замкнуть радар
@@ -56,10 +49,7 @@ def create_metrics_chart(scores):
         theta=metrics_for_chart,
         fill='toself',
         name='Оценки',
-         # Можно добавить маркеры и текст с точными значениями
-        mode='lines+markers', # +text
-        # text=[f'{v:.3f}' for v in values_for_chart[:-1]], # Показываем текст для исходных точек
-        # textposition='top center'
+        mode='lines+markers' # Отображаем линии и маркеры
     ))
 
     fig.update_layout(
@@ -69,19 +59,18 @@ def create_metrics_chart(scores):
                 range=[0, 1], # Диапазон от 0 до 1
                 tickvals=[0, 0.25, 0.5, 0.75, 1.0], # Деления на оси
                 ticktext=['0', '0.25', '0.5', '0.75', '1.0'],
-                angle=90, # Начальный угол оси (0 градусов = восток)
-                tickangle = 90 # Угол для подписей оси
+                angle=90,
+                tickangle = 90
             ),
             angularaxis=dict(
-                 tickfont_size=10 # Размер шрифта для названий метрик
+                 tickfont_size=10
              )
         ),
-        showlegend=False, # Легенда не нужна для одного набора данных
+        showlegend=False,
         title=dict(
             text='Обзор Оценок Качества Перевода',
-            x=0.5 # Центрируем заголовок
+            x=0.5
         ),
-        # Настраиваем поля для лучшего вида
         margin=dict(l=60, r=60, t=80, b=40)
     )
 
@@ -90,32 +79,29 @@ def create_metrics_chart(scores):
 
 def create_results_df(scores):
     """Создает DataFrame Pandas с результатами (метрика и оценка)."""
-    # Форматируем числовые значения для наглядности
     formatted_scores = []
     for metric, score in scores.items():
         if isinstance(score, (int, float)) and np.isfinite(score):
-            # Форматируем до 4 знаков после запятой
-            formatted_scores.append(f"{score:.4f}")
+            formatted_scores.append(f"{score:.4f}") # Форматируем до 4 знаков
         elif score is None:
-            formatted_scores.append("N/A") # Если значение None
+            formatted_scores.append("N/A")
         else:
-            formatted_scores.append(str(score)) # Для других типов (маловероятно)
+            formatted_scores.append(str(score))
 
     return pd.DataFrame({
-        'Метрика': list(scores.keys()), # Название колонки на русском
-        'Оценка': formatted_scores      # Название колонки на русском
+        'Метрика': list(scores.keys()),
+        'Оценка': formatted_scores
     })
 
 
 def get_metric_descriptions():
-    """Возвращает словарь с описаниями метрик (использует Markdown)."""
-    # Используем markdown для лучшего форматирования в Streamlit expanders
+    """Возвращает словарь с описаниями оставшихся метрик (использует Markdown)."""
     return {
         'BLEU': """
         **BLEU (Bilingual Evaluation Understudy)** измеряет *точность* (precision) n-грамм (последовательностей из n слов) в переводе-кандидате по сравнению с эталонным(и) переводом(ами).
         * **Диапазон:** 0 - 1 (или 0 - 100).
         * **Чем выше, тем лучше.**
-        * Хорошо коррелирует с оценками людей в среднем, но может штрафовать за синтаксические вариации и предпочитает более короткие переводы (из-за штрафа за краткость).
+        * Хорошо коррелирует с оценками людей в среднем, но может штрафовать за синтаксические вариации и предпочитает более короткие переводы.
         """,
 
         'chrF': """
@@ -125,20 +111,8 @@ def get_metric_descriptions():
         * Менее чувствителен к ошибкам токенизации, чем метрики на словах (BLEU), и часто лучше коррелирует с оценками людей для морфологически богатых языков.
         """,
 
-        'METEOR': """
-        **METEOR (Metric for Evaluation of Translation with Explicit ORdering)** вычисляет оценку на основе выровненных униграмм (слов) между кандидатом и эталоном. Учитывает точные совпадения, совпадения основ (стемминг) и синонимы (в полных реализациях). Использует точность, полноту и штраф за неправильный порядок слов (фрагментацию).
-        * **Диапазон:** 0 - 1.
-        * **Чем выше, тем лучше.**
-        * Обычно коррелирует с оценками людей лучше, чем BLEU, особенно на уровне предложений.
-        """,
+        # Удалены описания для TER, METEOR, BEER
 
-        'BEER': """
-        **BEER (BEtter Evaluation as Ranking)** — обучаемая метрика (хотя часто используется с параметрами по умолчанию), комбинирующая различные признаки, такие как символьные и словесные n-граммы. Представленная здесь упрощенная версия фокусируется на символьных n-граммах и пересечении слов с транслитерацией для кириллицы.
-        * **Диапазон:** 0 - 1.
-        * **Чем выше, тем лучше.**
-        """,
-
-        # <<< ОБНОВЛЕННОЕ ОПИСАНИЕ MAKTS >>>
         'MAKTS': """
         **MAKTS v2 (Root-Weighted chrF)**: Эта версия MAKTS основана на метрике **chrF**, но улучшена с использованием морфологической информации от **Apertium**.
         * Она вычисляет перекрытие символьных n-грамм, как и chrF.
@@ -149,5 +123,4 @@ def get_metric_descriptions():
         * **Чем выше, тем лучше.**
         * **Зависимость:** Требует корректно установленных **Apertium** и языкового пакета `apertium-kaz`. Если Apertium недоступен, метрика вернет стандартное значение **chrF**.
         """
-        # <<< КОНЕЦ ОБНОВЛЕННОГО ОПИСАНИЯ >>>
     }
