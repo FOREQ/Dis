@@ -2,37 +2,40 @@
 
 import nltk
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-# Закомментировал импорт, так как word_tokenize используется только в старой версии BLEU
-# from nltk.tokenize import word_tokenize
 import numpy as np
 import re
 from collections import Counter
-import sacrebleu
+import sacrebleu # Для chrF и как fallback для MAKTS
+
+# --- Импорты для MAKTS v2 ---
 try:
     import apertium
-    from streamparser import LexicalUnit, SReading # Добавим SReading на всякий случай
+    # streamparser используется для объекта LexicalUnit, который возвращает apertium.Analyzer
+    from streamparser import LexicalUnit, SReading
     APERTIUM_AVAILABLE = True
 except ImportError:
     print("="*80)
     # Исправленный текст предупреждения
-    print("ПРЕДУПРЕЖДЕНИЕ: Не удалось импортировать библиотеку 'apertium'.")
-    print("Вероятно, пакет 'apertium' для Python не установлен (pip install apertium)")
+    print("ПРЕДУПРЕЖДЕНИЕ: Не удалось импортировать 'apertium' или 'streamparser'.")
+    print("Возможно, пакет 'apertium'/'apertium-streamparser' для Python не установлен")
+    print("(pip install apertium apertium-streamparser)")
     print("или отсутствуют необходимые системные компоненты Apertium.")
     print("Новая метрика MAKTS (взвешенный chrF) будет недоступна и вернет стандартный chrF.")
-    print("ВАЖНО: Требуется системная установка Apertium core, apertium-kaz и, возможно, python3-apertium-core.")
+    print("ВАЖНО: Требуется системная установка Apertium core, apertium-kaz и python3-apertium-core.")
     print("См. инструкции по установке Apertium: https://wiki.apertium.org/wiki/Installation")
     print("="*80)
     APERTIUM_AVAILABLE = False
-# --- КОНЕЦ НОВЫХ ИМПОРТОВ ---
+# --- КОНЕЦ ИМПОРТОВ для MAKTS v2 ---
 
 
 # --- Примечание об установке ---
 # Этот код требует:
 # - nltk: pip install nltk
 # - numpy: pip install numpy
-# - sacrebleu: pip install sacrebleu (для chrF и как fallback для MAKTS)
+# - sacrebleu: pip install sacrebleu
 # - apertium: pip install apertium (Python-обертка)
-# - Системная установка: Apertium core, apertium-kaz, python3-apertium-core (или аналог)
+# - apertium-streamparser: pip install apertium-streamparser
+# - Системная установка: Apertium core, apertium-kaz, python3-apertium-core
 
 # Download required NLTK data (оставляем для BLEU)
 try:
@@ -41,29 +44,8 @@ except Exception as e:
     print(f"Warning: NLTK data download issue: {e}")
 
 # ==============================================================================
-# Вспомогательные функции
+# Вспомогательные функции (Только нужные для оставшихся метрик)
 # ==============================================================================
-
-def transliterate_cyrillic(text):
-    """
-    Transliterate Cyrillic text to Latin alphabet for BEER metric
-    """
-    cyrillic_to_latin = {
-        'а': 'a', 'ә': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'ғ': 'g',
-        'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh', 'з': 'z', 'и': 'i',
-        'й': 'y', 'к': 'k', 'қ': 'q', 'л': 'l', 'м': 'm', 'н': 'n',
-        'ң': 'n', 'о': 'o', 'ө': 'o', 'п': 'p', 'р': 'r', 'с': 's',
-        'т': 't', 'у': 'u', 'ұ': 'u', 'ү': 'u', 'ф': 'f', 'х': 'h',
-        'һ': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '',
-        'ы': 'y', 'і': 'i', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
-    }
-    return ''.join(cyrillic_to_latin.get(c.lower(), c) for c in text)
-
-def get_char_ngrams_simple(text, n=4):
-    """Get character n-grams from text (simple version for BEER)"""
-    if not text or len(text) < n:
-        return []
-    return [text[i:i+n] for i in range(len(text)-n+1)]
 
 def get_char_ngrams_with_pos(text, n):
     """Генерирует n-граммы с их начальными и конечными позициями в тексте."""
@@ -72,32 +54,9 @@ def get_char_ngrams_with_pos(text, n):
     text_lower = text.lower() # Сравнение без учета регистра
     return [(text_lower[i:i+n], i, i+n) for i in range(len(text_lower) - n + 1)]
 
-
 # ==============================================================================
-# Функции расчета стандартных метрик (кроме TER)
+# Функции расчета метрик (Оставлены BLEU, chrF, MAKTS v2)
 # ==============================================================================
-
-def calculate_beer(reference, candidate):
-    """
-    Calculate BEER score with Cyrillic support through transliteration
-    Implementation focuses on character n-grams and word overlap
-    """
-    if not reference or not candidate: return 0.0
-    if any(ord(char) > 127 for char in reference[:50] + candidate[:50]):
-        reference = transliterate_cyrillic(reference)
-        candidate = transliterate_cyrillic(candidate)
-    reference = reference.lower()
-    candidate = candidate.lower()
-    ref_words = set(reference.split())
-    cand_words = set(candidate.split())
-    word_denom = max(len(ref_words), len(cand_words), 1)
-    word_overlap = len(ref_words & cand_words) / word_denom if word_denom > 0 else 0.0
-    ref_ngrams = set(get_char_ngrams_simple(reference))
-    cand_ngrams = set(get_char_ngrams_simple(candidate))
-    char_denom = max(len(ref_ngrams), len(cand_ngrams), 1)
-    char_overlap = len(ref_ngrams & cand_ngrams) / char_denom if char_denom > 0 else 0.0
-    score = 0.6 * char_overlap + 0.4 * word_overlap
-    return max(0.0, min(score, 1.0))
 
 def calculate_bleu(reference, candidate, language='english'):
     """
@@ -108,34 +67,16 @@ def calculate_bleu(reference, candidate, language='english'):
     reference_tokens = reference.lower().split()
     candidate_tokens = candidate.lower().split()
     if not candidate_tokens: return 0.0
-    if not reference_tokens: return 0.0
+    if not reference_tokens: return 0.0 # Return 0 if reference is empty
     reference_list = [reference_tokens]
-    smoothing = SmoothingFunction().method1
+    smoothing = SmoothingFunction().method1 # Standard smoothing for sentence BLEU
     try:
-        return sentence_bleu(reference_list, candidate_tokens, smoothing_function=smoothing)
+        # Ensure score is within [0, 1] range
+        bleu_score = sentence_bleu(reference_list, candidate_tokens, smoothing_function=smoothing, auto_reweigh=True) # auto_reweigh helps with short sentences
+        return max(0.0, min(bleu_score, 1.0))
     except Exception as e:
         print(f"Error calculating BLEU: {e}")
         return 0.0
-
-def calculate_meteor(reference, candidate):
-    """
-    Calculate METEOR score (simplified version focusing on exact word matches, F1).
-    """
-    if not reference or not candidate: return 0.0
-    ref_words = reference.lower().split()
-    can_words = candidate.lower().split()
-    len_ref = len(ref_words)
-    len_can = len(can_words)
-    if len_ref == 0 or len_can == 0: return 0.0
-    ref_words_set = set(ref_words)
-    can_words_set = set(can_words)
-    matches = len(ref_words_set.intersection(can_words_set))
-    if matches == 0: return 0.0
-    precision = matches / len_can
-    recall = matches / len_ref
-    if precision + recall == 0: return 0.0
-    f_mean = (2 * precision * recall) / (precision + recall)
-    return f_mean
 
 def calculate_chrf(reference, candidate):
     """
@@ -143,7 +84,9 @@ def calculate_chrf(reference, candidate):
     """
     if not reference or not candidate: return 0.0
     try:
+        # sentence_chrf uses default parameters (char_order=6, word_order=0, beta=1)
         chrf_score_obj = sacrebleu.sentence_chrf(candidate, [reference])
+        # Score is 0-100, scale to 0-1
         return chrf_score_obj.score / 100.0
     except Exception as e:
         print(f"Error calculating chrF: {e}")
@@ -176,11 +119,11 @@ def get_stems_with_spans(text, analyzer):
     """
     Анализирует текст с помощью Apertium и возвращает список кортежей:
     (лемма, начальный_индекс_в_тексте, конечный_индекс_в_тексте).
-    Использует эвристику выбора лучшей леммы И ДЕТАЛЬНУЮ ОТЛАДКУ.
+    Использует эвристику для выбора лучшей леммы из ВСЕХ анализов Apertium.
+    Версия с исправленной обработкой LexicalUnit и без проверки префикса startswith.
     """
     if not analyzer or not text: return []
     stems_info = []
-    print(f"\n--- Analyzing text: '{text[:50]}...'")
 
     for match in re.finditer(r'(\S+)|(\s+)', text):
         token = match.group(0)
@@ -188,86 +131,73 @@ def get_stems_with_spans(text, analyzer):
 
         if match.group(1): # Process only non-whitespace tokens
             word_token_from_regex = token
-            print(f"\n+++ Processing Word: '{word_token_from_regex}' at index {start_index}") # DEBUG WORD
+            # print(f"\n+++ Processing Word: '{word_token_from_regex}' at index {start_index}") # DEBUG WORD
             try:
-                analyses = analyzer.analyze(word_token_from_regex)
-                print(f"    +++ Analyze Result: {analyses}") # DEBUG ANALYSIS
+                analyses = analyzer.analyze(word_token_from_regex) # Returns List[LexicalUnit]
 
-                extracted_pairs = []
+                extracted_pairs = [] # Collect all possible (lemma, surface) pairs
 
                 if analyses and isinstance(analyses, list):
-                    lu = analyses[0]
+                    # Assume the list contains ONE main LexicalUnit for the word form
+                    lu = analyses[0] # Take the first LexicalUnit object
+                    # Ensure it's the correct type using the imported class
+                    if not isinstance(lu, LexicalUnit): continue
+
                     surface = lu.wordform if hasattr(lu, 'wordform') else word_token_from_regex
-                    print(f"    +++ Got Surface: '{surface}'") # DEBUG SURFACE
 
                     if hasattr(lu, 'readings') and lu.readings:
-                        print(f"    +++ Found {len(lu.readings)} reading path(s)") # DEBUG READINGS COUNT
-                        for i, analysis_path in enumerate(lu.readings):
-                            print(f"        +++ Processing Path {i}: {analysis_path}") # DEBUG PATH
+                        # Iterate through all analysis paths provided
+                        for analysis_path in lu.readings:
+                            # Check if path is valid and get the first segment (SReading)
                             if isinstance(analysis_path, list) and analysis_path and isinstance(analysis_path[0], SReading):
                                 first_segment = analysis_path[0]
                                 if hasattr(first_segment, 'baseform'):
                                     lemma = first_segment.baseform
-                                    print(f"            +++ Extracted Lemma: '{lemma}'") # DEBUG LEMMA
+                                    # Add valid string pairs
                                     if lemma and surface and isinstance(lemma, str) and isinstance(surface, str):
                                         extracted_pairs.append((lemma, surface))
-                                else:
-                                     print(f"            !!! Segment has no baseform attribute") # DEBUG NO BASEFORM
-                            else:
-                                print(f"        !!! Invalid analysis path or segment type: {type(analysis_path)} or {type(analysis_path[0]) if analysis_path else 'Empty Path'}") # DEBUG INVALID PATH
-                    else:
-                        print(f"    !!! No 'readings' attribute found or readings is empty.") # DEBUG NO READINGS
 
-                else:
-                     print(f"    !!! Analyze returned None or not a list.") # DEBUG NO ANALYSIS
-
-                # --- Apply heuristic ---
+                # --- Apply heuristic to choose the best lemma ---
                 best_lemma = None
                 best_surface = None
                 unique_extracted_pairs = list(set(extracted_pairs))
-                print(f"    +++ Unique Extracted Pairs: {unique_extracted_pairs}") # DEBUG UNIQUE PAIRS
 
-                if not unique_extracted_pairs:
-                    print(f"    !!! No unique pairs found, skipping heuristic.") # DEBUG NO UNIQUE
-                    continue
+                if not unique_extracted_pairs: continue # Skip if no valid pairs found
 
+                # Find lemmas shorter than the surface form
                 shorter_lemmas = [(lem, surf) for lem, surf in unique_extracted_pairs if len(lem) < len(surf)]
-                print(f"    +++ Shorter Lemmas: {shorter_lemmas}") # DEBUG SHORTER
 
                 if shorter_lemmas:
+                    # Choose the pair with the longest lemma among the shorter ones
                     best_lemma, best_surface = max(shorter_lemmas, key=lambda item: len(item[0]))
-                    print(f"    +++ Heuristic chose from shorter: '{best_lemma}'") # DEBUG CHOICE
                 else:
+                    # Fallback: choose the first extracted pair (might be same as surface)
                     best_lemma, best_surface = unique_extracted_pairs[0]
-                    print(f"    +++ Heuristic chose first (no shorter): '{best_lemma}'") # DEBUG CHOICE
+                # --- End of heuristic ---
 
-                # --- Apply prefix check ---
+                # Apply length check only (prefix check removed)
                 stem_len = len(best_lemma)
-                # Убрали проверку best_surface.lower().startswith(best_lemma.lower())
-                # Оставили только проверку, что лемма не длиннее исходного слова
-                if stem_len <= len(best_surface):
+                if stem_len <= len(best_surface): # Lemma should not be longer than surface
                     stem_start_in_text = start_index
-                    stem_end_in_text = start_index + stem_len # Граница основы определяется длиной леммы
+                    stem_end_in_text = start_index + stem_len # Span determined by lemma length
                     stems_info.append((best_lemma, stem_start_in_text, stem_end_in_text))
-                    print(f"    >>> SUCCESS (Prefix check ignored): Stem added: ('{best_lemma}', {stem_start_in_text}, {stem_end_in_text})") # DEBUG SUCCESS
-                else:
-                    # Эта ветка теперь маловероятна, но оставим на всякий случай
-                    print(f"    !!! Length check failed for lemma '{best_lemma}' and surface '{best_surface}'") # DEBUG LEN FAIL
+                    # print(f"    >>> SUCCESS (Prefix check ignored): Stem added: ('{best_lemma}', {stem_start_in_text}, {stem_end_in_text})") # DEBUG SUCCESS
+                # else:
+                    # print(f"    !!! Length check failed for lemma '{best_lemma}' and surface '{best_surface}'") # DEBUG LEN FAIL
 
             except Exception as e:
-                # Эта ошибка теперь будет ловить только непредвиденные исключения
-                print(f"  XXX UNEXPECTED ERROR processing word '{word_token_from_regex}': {e}") # DEBUG UNEXPECTED ERROR
+                print(f"  ERROR processing word '{word_token_from_regex}': {e}")
                 pass
 
-    # Final output
-    print(f"\n--- Finished analyzing text. Stems extracted: {len(stems_info)}")
+    # Final output of extracted stems (optional control print)
     if stems_info:
-        # print(f"--- Extracted stems for: '{text[:50]}...'") # Already printed above
+        print(f"--- Extracted stems for: '{text[:50]}...'")
         for lem, s, e in stems_info:
-             print(f"  Lemma: '{lem}', Span: ({s}, {e}), Text: '{text[s:e]}'")
-    # else:
-        # print(f"--- *** No stems extracted for text: '{text[:50]}...' ***") # Already printed above
+            print(f"  Lemma: '{lem}', Span: ({s}, {e}), Text: '{text[s:e]}'")
+    else:
+        print(f"--- *** No stems extracted for text: '{text[:50]}...' ***")
     return stems_info
+
 
 def calculate_weighted_chrf(reference, candidate, ref_stems_info, cand_stems_info,
                             root_weight=2.0, n=6, beta=1.0):
@@ -298,7 +228,6 @@ def calculate_weighted_chrf(reference, candidate, ref_stems_info, cand_stems_inf
     if weighted_total_cand == 0 or weighted_total_ref == 0: return 0.0
 
     # --- Подсчет взвешенных совпадений (числитель) ---
-    # Группируем позиции для каждой n-граммы для точного сопоставления
     ref_ngram_positions = {}
     for ngram, start, end in ref_ngrams_pos:
         if ngram not in ref_ngram_positions: ref_ngram_positions[ngram] = []
@@ -310,29 +239,33 @@ def calculate_weighted_chrf(reference, candidate, ref_stems_info, cand_stems_inf
         cand_ngram_positions[ngram].append((start, end))
 
     weighted_matches = 0.0
-    processed_cand_indices = {} # {ngram: set(indices_used)} - чтобы не использовать одну и ту же поз. кандидата дважды
+    processed_cand_indices = {} # {ngram: set(indices_used)}
 
-    # Итерируем по УНИКАЛЬНЫМ позициям в эталоне, чтобы сопоставить с кандидатом
+    # Итерируем по позициям N-грамм в ЭТАЛОНЕ
     for ngram, r_start, r_end in ref_ngrams_pos:
+        # Если такая n-грамма есть в кандидате И еще не все ее вхождения там использованы
         if ngram in cand_ngram_positions:
-            is_ref_ngram_root = ref_is_root_ngram_pos.get((r_start, r_end), False)
-
             # Ищем неиспользованную позицию этой же n-граммы в кандидате
-            found_match = False
+            found_match_pos = -1
             if ngram not in processed_cand_indices:
                 processed_cand_indices[ngram] = set()
 
             for c_idx, (c_start, c_end) in enumerate(cand_ngram_positions[ngram]):
                 if c_idx not in processed_cand_indices[ngram]:
-                    # Нашли совпадение! Определяем его вес
-                    is_cand_ngram_root = cand_is_root_ngram_pos.get((c_start, c_end), False)
-                    # Применяем повышенный вес, если ОБА вхождения корневые
-                    match_weight = root_weight if (is_ref_ngram_root and is_cand_ngram_root) else 1.0
-                    weighted_matches += match_weight
-                    processed_cand_indices[ngram].add(c_idx) # Помечаем позицию кандидата как использованную
-                    found_match = True
-                    break # Переходим к следующей n-грамме эталона
-            # (Если не нашли свободного совпадения в кандидате, found_match останется False)
+                    found_match_pos = c_idx
+                    break # Нашли первое свободное совпадение
+
+            if found_match_pos != -1:
+                 # Есть совпадение! Определяем его вес
+                c_start, c_end = cand_ngram_positions[ngram][found_match_pos]
+                is_ref_ngram_root = ref_is_root_ngram_pos.get((r_start, r_end), False)
+                is_cand_ngram_root = cand_is_root_ngram_pos.get((c_start, c_end), False)
+
+                # Применяем повышенный вес, если ОБА вхождения корневые
+                match_weight = root_weight if (is_ref_ngram_root and is_cand_ngram_root) else 1.0
+                weighted_matches += match_weight
+                # Помечаем позицию кандидата как использованную
+                processed_cand_indices[ngram].add(found_match_pos)
 
     # --- Расчет P, R, F ---
     P_w = weighted_matches / weighted_total_cand
@@ -340,7 +273,8 @@ def calculate_weighted_chrf(reference, candidate, ref_stems_info, cand_stems_inf
     if P_w == 0 and R_w == 0: return 0.0
     denominator = (beta**2 * P_w) + R_w
     score = ((1 + beta**2) * P_w * R_w) / denominator if denominator > 0 else 0.0
-    return score
+    # Ограничиваем результат диапазоном [0, 1] на всякий случай
+    return max(0.0, min(score, 1.0))
 
 
 # --- Финальная функция calculate_makts ---
@@ -359,7 +293,7 @@ def calculate_makts(reference, candidate, root_weight=2.0, n=6, beta=1.0):
         print("ПРЕДУПРЕЖДЕНИЕ: Apertium не инициализирован. Возвращаем стандартный chrF.")
         return calculate_chrf(reference, candidate)
 
-    # Очистка текста для анализа Apertium (может помочь с некоторыми ошибками)
+    # Очистка текста от лишних пробелов
     ref_cleaned = re.sub(r'\s+', ' ', reference).strip()
     cand_cleaned = re.sub(r'\s+', ' ', candidate).strip()
 
@@ -369,8 +303,5 @@ def calculate_makts(reference, candidate, root_weight=2.0, n=6, beta=1.0):
     # Вычисляем взвешенный chrF с агрессивной логикой взвешивания совпадений
     score = calculate_weighted_chrf(ref_cleaned, cand_cleaned, ref_stems_info, cand_stems_info,
                                     root_weight=root_weight, n=n, beta=beta)
-    return score
 
-# ==============================================================================
-# calculate_ter и СТАРАЯ РЕАЛИЗАЦИЯ MAKTS удалены / закомментированы
-# ==============================================================================
+    return score
