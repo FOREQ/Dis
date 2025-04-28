@@ -2,7 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-# Импортируем только нужные метрики
+# Импортируем только оставшиеся метрики
 from metrics import (
     calculate_bleu,
     calculate_chrf,
@@ -13,7 +13,7 @@ from utils import (
     validate_input,
     create_metrics_chart,
     create_results_df,
-    get_metric_descriptions # Должен содержать описания только для оставшихся метрик
+    get_metric_descriptions # Должен содержать описания только для BLEU, chrF, MAKTS
 )
 
 # --- Конфигурация страницы ---
@@ -27,23 +27,17 @@ st.set_page_config(
 st.title("Инструмент Оценки Качества Перевода")
 # Обновленное описание с оставшимися метриками
 st.markdown("""
-Этот инструмент помогает оценить качество перевода между английским, русским и казахским языками,
-используя метрики: **BLEU**, **chrF** и **MAKTS v2** (взвешенный chrF с использованием морфологии).
+Этот инструмент помогает оценить качество перевода, используя метрики:
+**BLEU**, **chrF** и **MAKTS v2** (взвешенный chrF с использованием морфологии).
 
 **MAKTS v2** требует установленного **Apertium** и языкового пакета `apertium-kaz`.
 Если Apertium недоступен, MAKTS вернет стандартное значение **chrF**.
-""") # Убрали TER, METEOR, BEER
+""") # Убрали TER, METEOR, BEER и выбор языка
 
-# --- Выбор Языковой Пары ---
-language_pairs = [
-    "English → Kazakh",
-    "Russian → Kazakh",
-    "Kazakh → English",
-    "Kazakh → Russian"
-]
-selected_pair = st.selectbox("Выберите языковую пару", language_pairs)
-# Определяем исходный язык для BLEU
-source_language = selected_pair.split(" → ")[0].lower()
+# --- Выбор Языковой Пары (УДАЛЕНО) ---
+# language_pairs = [...]
+# selected_pair = st.selectbox(...)
+# source_language = selected_pair.split(...)[0].lower() # Больше не нужно
 
 # --- Выбор Способа Ввода ---
 input_method = st.radio(
@@ -87,24 +81,19 @@ else: # Загрузка файла
                 upload_error = True # Устанавливаем флаг ошибки
 
 # --- Кнопка Оценки и Расчеты ---
-# Делаем кнопку неактивной, если была ошибка загрузки файла
 if st.button("Оценить перевод", disabled=upload_error):
-    # Проверка валидности ввода
     is_ref_valid = validate_input(reference_text)
     is_cand_valid = validate_input(candidate_text)
 
     if not is_ref_valid or not is_cand_valid:
         st.error("Пожалуйста, предоставьте и эталонный перевод, и перевод-кандидат (через текст или файл).")
     else:
-        # Используем спиннер во время расчетов
         with st.spinner("Вычисление метрик... Это может занять некоторое время, особенно для MAKTS."):
             try:
                 # Вычисляем только оставшиеся метрики
-                bleu_score = calculate_bleu(reference_text, candidate_text, source_language)
+                # Убрали аргумент language из calculate_bleu, т.к. он больше не используется
+                bleu_score = calculate_bleu(reference_text, candidate_text)
                 chrf_score = calculate_chrf(reference_text, candidate_text)
-                # ter_score = calculate_ter(reference_text, candidate_text) # УБРАНО
-                # meteor_score = calculate_meteor(reference_text, candidate_text) # УБРАНО
-                # beer_score = calculate_beer(reference_text, candidate_text) # УБРАНО
 
                 # Вычисляем новый MAKTS v2
                 # Используем значение по умолчанию root_weight=2.0
@@ -114,31 +103,21 @@ if st.button("Оценить перевод", disabled=upload_error):
                 scores = {
                     'BLEU': bleu_score,
                     'chrF': chrf_score,
-                    # 'TER': ter_score,     # УБРАНО
-                    # 'METEOR': meteor_score, # УБРАНО
-                    # 'BEER': beer_score,     # УБРАНО
                     'MAKTS': makts_score
                 }
 
-                # Убираем None, если MAKTS вернул None (маловероятно, т.к. есть fallback)
                 scores_filtered = {k: v for k, v in scores.items() if v is not None}
-
-                 # Готовим данные для диаграммы
-                scores_for_chart = scores_filtered.copy() # Используем копию
+                scores_for_chart = scores_filtered.copy()
 
                 # --- Отображение Результатов ---
                 st.subheader("Результаты Оценки")
-
-                col_res1, col_res2 = st.columns([2, 3]) # Соотношение колонок
+                col_res1, col_res2 = st.columns([2, 3])
 
                 with col_res1:
                     # Таблица с результатами
                     if scores_filtered:
-                        # Используем функцию из utils для создания DataFrame
                         results_df = create_results_df(scores_filtered)
-                        # Отображаем DataFrame без индекса и с использованием ширины колонки
                         st.dataframe(results_df, hide_index=True, use_container_width=True)
-
                         # Кнопка скачивания CSV
                         try:
                             csv = results_df.to_csv(index=False).encode('utf-8')
@@ -147,7 +126,7 @@ if st.button("Оценить перевод", disabled=upload_error):
                                 data=csv,
                                 file_name="translation_metrics.csv",
                                 mime="text/csv",
-                                key='download-csv' # Уникальный ключ для кнопки
+                                key='download-csv'
                             )
                         except Exception as e:
                             st.error(f"Не удалось создать CSV: {e}")
@@ -157,8 +136,6 @@ if st.button("Оценить перевод", disabled=upload_error):
                 with col_res2:
                     # Радарная диаграмма
                     if scores_for_chart:
-                        # Используем функцию из utils для создания диаграммы
-                        # Она должна сама обработать нужные метрики (теперь без TER)
                         fig = create_metrics_chart(scores_for_chart)
                         st.plotly_chart(fig, use_container_width=True)
                     else:
@@ -166,24 +143,18 @@ if st.button("Оценить перевод", disabled=upload_error):
 
                 # --- Описания Метрик ---
                 st.subheader("Описание Метрик")
-                # Загружаем описания
                 descriptions = get_metric_descriptions()
-
-                # Отображаем описания только для посчитанных метрик (BLEU, chrF, MAKTS)
                 displayed_metrics = list(scores_filtered.keys())
 
                 for metric in displayed_metrics:
                      if metric in descriptions:
-                         # Используем st.expander для сворачиваемых описаний
                          with st.expander(f"Подробнее о {metric}"):
-                             # Используем markdown для форматирования
                              st.markdown(descriptions[metric], unsafe_allow_html=True)
-                     # else: # Эта проверка больше не нужна, если utils.py тоже очищен
+                     # else: # Описание должно быть в utils.py для оставшихся метрик
                          # st.warning(f"Описание для метрики {metric} не найдено.")
 
             except Exception as e:
                 st.error(f"Произошла ошибка при вычислении метрик: {e}")
-                # Показываем полный traceback для отладки
                 st.exception(e)
 
 
@@ -193,4 +164,4 @@ st.markdown("""
 <div style='text-align: center; color: grey;'>
     <p>Инструмент Оценки Качества Перевода - 2025</p>
 </div>
-""", unsafe_allow_html=True) # unsafe_allow_html=True необходимо для рендеринга HTML
+""", unsafe_allow_html=True)
