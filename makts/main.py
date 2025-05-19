@@ -91,15 +91,15 @@ if st.button("Оценить перевод", disabled=upload_error):
                 # --- Вычисляем MAKTS с разными весами ---
                 makts_weights = [1.5, 2.0, 2.5, 3.0] # Задаем веса для тестирования
                 makts_scores = {}
-                st.write("--- DEBUG: Начинаю расчет MAKTS с разными весами ---") # Отладка
+                #st.write("--- DEBUG: Начинаю расчет MAKTS с разными весами ---") # Отладка
                 for weight in makts_weights:
-                    st.write(f"--- DEBUG: Расчет MAKTS для root_weight={weight} ---") # Отладка
+                    #st.write(f"--- DEBUG: Расчет MAKTS для root_weight={weight} ---") # Отладка
                     makts_scores[f'MAKTS (w={weight})'] = calculate_makts(
                         reference_text,
                         candidate_text,
                         root_weight=weight
                     )
-                    st.write(f"--- DEBUG: Результат MAKTS (w={weight}): {makts_scores[f'MAKTS (w={weight})']:.4f} ---") # Отладка
+                    #st.write(f"--- DEBUG: Результат MAKTS (w={weight}): {makts_scores[f'MAKTS (w={weight})']:.4f} ---") # Отладка
                 # --- Конец расчета MAKTS с разными весами ---
 
                 # Собираем основные результаты в словарь
